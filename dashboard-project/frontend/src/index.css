@@ -78,33 +78,24 @@ h1, h2, h3, h4, .page-title, .dataset-section-title, .filters-title {
 /* ---------- Sidebar ---------- */
 
 .sidebar {
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid var(--line);
   padding: 24px 18px;
   background: var(--panel);
   transition: background-color 0.25s ease, border-color 0.25s ease;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .brand-logo-wrapper {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  cursor: pointer;
   padding: 8px;
   margin: -8px -8px 4px;
-  border-radius: 10px;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  user-select: none;
-  border: 1px solid transparent;
-}
-
-.brand-logo-wrapper:hover {
-  background: var(--teal-dim);
-  border-color: var(--line);
-  transform: translateY(-1px);
-}
-
-.brand-logo-wrapper:active {
-  transform: scale(0.98);
 }
 
 .brand-logo {
@@ -114,31 +105,60 @@ h1, h2, h3, h4, .page-title, .dataset-section-title, .filters-title {
   height: auto;
   margin-bottom: 6px;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.1));
-  transition: filter 0.2s ease, transform 0.2s ease;
 }
 
-.brand-logo-wrapper:hover .brand-logo {
-  filter: drop-shadow(0 4px 8px rgba(37, 99, 235, 0.3));
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
 }
 
-.theme-toggle-pill {
-  display: inline-flex;
+.theme-switch-row {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 11px;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.theme-switch-label {
+  font-size: 12.5px;
   font-weight: 600;
   font-family: var(--font-brand);
   color: var(--muted);
-  background: var(--paper);
-  padding: 3px 8px;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  transition: all 0.2s ease;
 }
 
-.brand-logo-wrapper:hover .theme-toggle-pill {
-  color: var(--ink);
+.theme-switch {
+  position: relative;
+  flex-shrink: 0;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  cursor: pointer;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.theme-switch.on {
+  background: var(--teal);
   border-color: var(--teal);
+}
+
+.theme-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s ease;
+}
+
+.theme-switch.on .theme-switch-knob {
+  transform: translateX(18px);
 }
 
 .brand-sub {
@@ -343,6 +363,20 @@ h1, h2, h3, h4, .page-title, .dataset-section-title, .filters-title {
   z-index: 20;
 }
 
+/* Title + subtitle on the left, page-level actions (e.g. Export) on the
+   right, sharing the title block's existing height instead of a new row. */
+.page-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.page-title-row .export-dropdown {
+  margin-bottom: 0;
+}
+
 .filters-header {
   display: flex;
   align-items: center;
@@ -389,6 +423,37 @@ h1, h2, h3, h4, .page-title, .dataset-section-title, .filters-title {
 
 .btn-reset:hover {
   color: var(--danger);
+}
+
+.filters-header-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.filters-bar-collapsed {
+  margin-bottom: 24px;
+}
+
+.filters-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 16px;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+}
+
+.filters-toggle-btn:hover {
+  border-color: var(--teal);
+  color: var(--teal);
 }
 
 .filters-row {
@@ -929,6 +994,31 @@ h1, h2, h3, h4, .page-title, .dataset-section-title, .filters-title {
   overflow-x: auto;
 }
 
+.tabs-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.raw-data-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.raw-data-count {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.raw-data-pagination {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 16px;
+}
+
 table.team-table {
   border-collapse: collapse;
   width: 100%;
@@ -1263,6 +1353,42 @@ table.team-table tr:hover td {
   gap: 16px;
 }
 
+.gp-gauge-row {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  flex-wrap: wrap;
+}
+
+.gp-gauge-stats-grid {
+  flex: 1;
+  min-width: 260px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+}
+
+.gauge-chart {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.gauge-chart-value {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  margin-top: -8px;
+}
+
+.gauge-chart-sublabel {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 2px;
+}
+
 .gp-legend-pills {
   display: flex;
   gap: 12px;
@@ -1475,6 +1601,74 @@ table.team-table tr:hover td {
 
 .btn-secondary:hover {
   background: var(--teal-dim);
+}
+
+.export-dropdown {
+  position: relative;
+  display: inline-block;
+  margin-bottom: 24px;
+}
+
+.export-trigger-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  box-shadow: var(--shadow-card);
+}
+
+.export-trigger-btn:hover {
+  border-color: var(--teal);
+  color: var(--teal);
+}
+
+.export-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 100;
+  width: 280px;
+  max-width: 90vw;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+  padding: 6px;
+  animation: checklistPopIn 0.15s ease-out;
+}
+
+.export-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: none;
+  border-radius: 6px;
+  text-align: left;
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.export-menu-item:hover {
+  background: var(--teal-dim);
+}
+
+.export-menu-icon {
+  font-size: 15px;
 }
 
 .gp-alert {

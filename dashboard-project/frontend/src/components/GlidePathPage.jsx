@@ -5,6 +5,7 @@ import {
   fetchGlidepath,
   saveGlidepath,
 } from "../api";
+import GaugeChart from "./GaugeChart";
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -82,7 +83,7 @@ export default function GlidePathPage() {
       budget_amount: d.budget?.budget_amount || 0,
       actual_amount: d.budget?.actual_amount || 0,
       december_budget: d.budget?.december_budget || 0,
-      reduction_percent: d.budget?.reduction_percent || 5,
+      reduction_percent: d.budget?.reduction_percent ?? 0,
     });
     setEditMonths(
       (d.monthly || []).map((m) => ({
@@ -179,6 +180,28 @@ export default function GlidePathPage() {
     };
   }, [data, liveCalculatedMonthly, isEditing, editBudget.actual_amount]);
 
+  // Row representing "now": current calendar month if we're viewing the current
+  // year, otherwise the year's final (December) row.
+  const currentMonthRow = useMemo(() => {
+    if (liveCalculatedMonthly.length === 0) return null;
+    const now = new Date();
+    if (selectedYear === now.getFullYear()) {
+      const nowMonth = now.getMonth() + 1;
+      const match = liveCalculatedMonthly.find((m) => {
+        const parsed = new Date(m.requirement_month);
+        return !isNaN(parsed) && parsed.getUTCMonth() + 1 === nowMonth;
+      });
+      if (match) return match;
+    }
+    return liveCalculatedMonthly[liveCalculatedMonthly.length - 1];
+  }, [liveCalculatedMonthly, selectedYear]);
+
+  const nextMonthRow = useMemo(() => {
+    if (!currentMonthRow) return null;
+    const idx = liveCalculatedMonthly.indexOf(currentMonthRow);
+    return idx >= 0 ? liveCalculatedMonthly[idx + 1] ?? null : null;
+  }, [liveCalculatedMonthly, currentMonthRow]);
+
   const handleDeptChange = (field, value) => {
     setEditDept((prev) => ({ ...prev, [field]: value }));
   };
@@ -190,7 +213,7 @@ export default function GlidePathPage() {
       // If user adjusts budget amount or reduction %, suggest calculated December budget if not customized
       if (field === "budget_amount" || field === "reduction_percent") {
         const bAmt = field === "budget_amount" ? num : (prev.budget_amount || 0);
-        const rPct = field === "reduction_percent" ? num : (prev.reduction_percent || 5);
+        const rPct = field === "reduction_percent" ? num : (prev.reduction_percent ?? 0);
         updated.december_budget = Math.round(bAmt * (1 - rPct / 100));
       }
       return updated;
@@ -252,6 +275,11 @@ export default function GlidePathPage() {
 
   const dept = data?.department || {};
   const budget = data?.budget || {};
+  const capAmount = isEditing
+    ? Number(editBudget.budget_amount) || 0
+    : budget.budget_amount ?? 0;
+  const currentCount = currentMonthRow?.total_monthly_count ?? liveTotals.endCount;
+  const capUsedPct = capAmount > 0 ? (currentCount / capAmount) * 100 : 0;
   const currentDecBudget = isEditing
     ? (Number(editBudget.december_budget) || 0)
     : (budget.december_budget ?? 0);
@@ -488,6 +516,39 @@ export default function GlidePathPage() {
         </div>
       </div>
 
+      {/* Budget Cap Utilization Gauge */}
+      <div className="gp-card">
+        <div className="gp-card-header">
+          <div>
+            <div className="gp-card-title">% of Annual Budget Cap Used</div>
+            <div className="gp-card-sub">
+              {currentMonthRow?.month_name ?? "Current"} {selectedYear} fleet count against the authorized budget cap
+            </div>
+          </div>
+        </div>
+        <div className="gp-gauge-row">
+          <GaugeChart value={capUsedPct} sublabel="of Annual Budget Cap Used" />
+          <div className="gp-gauge-stats-grid">
+            <div className="kpi-card">
+              <div className="kpi-label">Budget Cap</div>
+              <div className="kpi-value font-mono">{capAmount || "—"}</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Current Count</div>
+              <div className="kpi-value font-mono">{currentCount}</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Planned Additions Next Month</div>
+              <div className="kpi-value font-mono">{nextMonthRow?.total_adds ?? "—"}</div>
+            </div>
+            <div className="kpi-card">
+              <div className="kpi-label">Planned Disposals Next Month</div>
+              <div className="kpi-value font-mono">{nextMonthRow?.disposal_count ?? "—"}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Middle Stat Strip: Budget & Year End Status */}
       <div className="gp-budget-strip">
         <div className="kpi-card">
@@ -524,7 +585,7 @@ export default function GlidePathPage() {
 
         <div className="kpi-card">
           <div className="kpi-label">
-            {editBudget.budget_year ?? (selectedYear - 1)} Dec Budget (-{isEditing ? editBudget.reduction_percent : (budget.reduction_percent ?? 5)}%)
+            {editBudget.budget_year ?? (selectedYear - 1)} Dec Budget (-{isEditing ? editBudget.reduction_percent : (budget.reduction_percent ?? 0)}%)
           </div>
           {isEditing ? (
             <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>

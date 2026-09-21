@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import TeamWiseSection from "./TeamWiseSection";
 import TeamWiseByTeam from "./TeamWiseByTeam";
-import { fetchTeamWiseSummary } from "../api";
+import { fetchTeamWiseSummary, fetchMaximoBudget } from "../api";
 
 const METRICS = [
   { label: "Arrivals", table: "arrival" },
@@ -14,9 +14,23 @@ const METRICS = [
 
 export default function TeamWisePage({ tables, refreshKey, globalFilters }) {
   const [summary, setSummary] = useState(null);
+  // Fetched independently of summary — a slow/unreachable Maximo API should
+  // never delay the rest of Team Wise, which is fast and DB-only.
+  const [maximo, setMaximo] = useState({ loading: true, value: null, error: null });
 
   useEffect(() => {
     fetchTeamWiseSummary(globalFilters).then((res) => setSummary(res.data));
+  }, [refreshKey, globalFilters]);
+
+  useEffect(() => {
+    setMaximo({ loading: true, value: null, error: null });
+    fetchMaximoBudget(globalFilters).then((res) =>
+      setMaximo({
+        loading: false,
+        value: res.data.maximo_budget,
+        error: res.data.maximo_error,
+      })
+    );
   }, [refreshKey, globalFilters]);
 
   const hasArrival = tables.some((t) => t.table_name === "arrival" || t.table_name === "niv_sheet_arrival");
@@ -33,6 +47,21 @@ export default function TeamWisePage({ tables, refreshKey, globalFilters }) {
     <>
       <div className="kpi-strip">
         {METRICS.map((m) => {
+          if (m.table === "maximo_budget") {
+            const hasData = maximo.value !== null && maximo.value !== undefined;
+            return (
+              <div className="kpi-card" key={m.table}>
+                <div className="kpi-label">{m.label}</div>
+                <div className="kpi-value">
+                  {maximo.loading ? "…" : hasData ? maximo.value : "—"}
+                </div>
+                {!maximo.loading && !hasData && (
+                  <div className="kpi-subrow">{maximo.error ?? "No data available"}</div>
+                )}
+              </div>
+            );
+          }
+
           const value = summary
             ? (summary.category_totals[m.table] ?? (m.table === "niv_sheet_disposal" ? summary.category_totals["to_be_disposed"] : null))
             : null;

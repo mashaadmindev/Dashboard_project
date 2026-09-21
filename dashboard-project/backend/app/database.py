@@ -147,7 +147,7 @@ def init_glidepath_tables():
         budget_amount NUMERIC(15,2),
         actual_amount NUMERIC(15,2),
         december_budget NUMERIC(15,2),
-        reduction_percent NUMERIC(5,2) DEFAULT 5.00,
+        reduction_percent NUMERIC(5,2) DEFAULT 0.00,
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP,
         CONSTRAINT fk_budget_glidepath
