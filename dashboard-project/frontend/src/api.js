@@ -68,6 +68,12 @@ export const fetchPeriodTrend = (table, period, filterState) =>
 export const fetchTeamWiseSummary = (filterState) =>
   client.get("/team-wise-summary", { params: buildParams(filterState) });
 
+// Independent of fetchTeamWiseSummary — it's a live call to Ford's Maximo
+// API that can be slow or unreachable, so it's fetched on its own timeline
+// rather than bundled into the (fast, DB-only) team-wise-summary response.
+export const fetchMaximoBudget = (filterState) =>
+  client.get("/maximo-budget", { params: buildParams(filterState) });
+
 export const fetchDashboardKpis = (table, filterState) =>
   client.get(`/dashboard-kpis/${table}`, { params: buildParams(filterState) });
 
@@ -94,3 +100,18 @@ export const askFordAi = (message, conversationHistory = [], filters = {}) =>
     conversation_history: conversationHistory,
     filters,
   });
+
+const buildQueryString = (filterState) =>
+  new URLSearchParams(buildParams(filterState)).toString();
+
+export const exportExcelUrl = (filterState, tables) => {
+  const qs = buildQueryString(filterState);
+  const tablesParam = tables && tables.length ? `&tables=${tables.join(",")}` : "";
+  return `/api/export/excel?${qs}${tablesParam}`;
+};
+
+export const exportCsvUrl = (table, filterState) =>
+  `/api/export/csv/${table}?${buildQueryString(filterState)}`;
+
+export const exportSummaryPdfUrl = (filterState) =>
+  `/api/export/summary-pdf?${buildQueryString(filterState)}`;

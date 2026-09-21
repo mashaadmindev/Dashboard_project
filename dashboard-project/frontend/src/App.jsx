@@ -8,6 +8,8 @@ import TeamWisePage from "./components/TeamWisePage";
 import GlidePathPage from "./components/GlidePathPage";
 import AskFordAiPage from "./components/AskFordAiPage";
 import UniversalFilterBar, { EMPTY_GLOBAL_FILTERS } from "./components/UniversalFilterBar";
+import ExportToolbar from "./components/ExportToolbar";
+import RawDataPage from "./components/RawDataPage";
 
 export default function App() {
   const [page, setPage] = useState("dashboard"); // "dashboard" | "teamwise" | "glidepath" | "upload" | "ai_analyst"
@@ -56,24 +58,8 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div
-          className="brand-logo-wrapper"
-          onClick={toggleTheme}
-          role="button"
-          tabIndex={0}
-          title={`Click to switch to ${theme === "dark" ? "White" : "Dark"} background`}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              toggleTheme();
-            }
-          }}
-        >
+        <div className="brand-logo-wrapper">
           <img src="/ford-logo.webp" alt="Ford" className="brand-logo" />
-          <div className="theme-toggle-pill">
-            <span className="theme-toggle-icon">{theme === "dark" ? "🌙" : "☀️"}</span>
-            <span className="theme-toggle-text">{theme === "dark" ? "Dark Mode" : "Light Mode"}</span>
-          </div>
         </div>
         <div className="brand-sub">Arrival & Disposal Analytics</div>
 
@@ -104,6 +90,14 @@ export default function App() {
           </li>
           <li>
             <button
+              className={`nav-item ${page === "raw_data" ? "active" : ""}`}
+              onClick={() => setPage("raw_data")}
+            >
+              Arrivals & Disposals
+            </button>
+          </li>
+          <li>
+            <button
               className={`nav-item ${page === "upload" ? "active" : ""}`}
               onClick={() => setPage("upload")}
             >
@@ -119,6 +113,24 @@ export default function App() {
             </button>
           </li>
         </ul>
+
+        <div className="sidebar-footer">
+          <div className="theme-switch-row">
+            <span className="theme-switch-label">
+              {theme === "dark" ? "🌙 Dark Mode" : "☀️ Light Mode"}
+            </span>
+            <button
+              type="button"
+              className={`theme-switch ${theme === "dark" ? "on" : ""}`}
+              onClick={toggleTheme}
+              role="switch"
+              aria-checked={theme === "dark"}
+              title={`Switch to ${theme === "dark" ? "Light" : "Dark"} mode`}
+            >
+              <span className="theme-switch-knob" />
+            </button>
+          </div>
+        </div>
       </aside>
 
       <main className="main">
@@ -134,10 +146,32 @@ export default function App() {
             <FileUpload onUploaded={handleUploaded} />
           </>
         ) : page === "glidepath" ? (
-          <GlidePathPage />
-        ) : (
           <>
             <UniversalFilterBar value={globalFilters} onChange={setGlobalFilters} />
+            <GlidePathPage />
+          </>
+        ) : page === "raw_data" ? (
+          <>
+            <h1 className="page-title">Arrival & Disposal Data</h1>
+            <p className="page-subtitle">
+              Every uploaded row and column, exactly as stored — filter, page through it, or
+              export it below.
+            </p>
+            <UniversalFilterBar value={globalFilters} onChange={setGlobalFilters} />
+            <RawDataPage
+              globalFilters={globalFilters}
+              arrivalMeta={arrivalMeta}
+              disposalMeta={disposalMeta}
+              refreshKey={refreshKey}
+            />
+          </>
+        ) : (
+          <>
+            <UniversalFilterBar
+              value={globalFilters}
+              onChange={setGlobalFilters}
+              alwaysOpen={page === "dashboard"}
+            />
 
             {page === "teamwise" ? (
               <>
@@ -150,10 +184,21 @@ export default function App() {
               </>
             ) : (
               <>
-                <h1 className="page-title">Dashboard</h1>
-                <p className="page-subtitle">
-                  Explore KPIs, filters, and breakdowns for arrivals and disposals.
-                </p>
+                <div className="page-title-row">
+                  <div>
+                    <h1 className="page-title">Dashboard</h1>
+                    <p className="page-subtitle">
+                      Explore KPIs, filters, and breakdowns for arrivals and disposals.
+                    </p>
+                  </div>
+                  {tables.length > 0 && (
+                    <ExportToolbar
+                      globalFilters={globalFilters}
+                      hasArrival={!!arrivalMeta}
+                      hasDisposal={!!disposalMeta}
+                    />
+                  )}
+                </div>
 
                 {tables.length === 0 ? (
                   <p className="empty-message">

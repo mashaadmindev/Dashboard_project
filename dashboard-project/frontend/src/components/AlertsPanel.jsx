@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
-import { fetchTeamWiseSummary, fetchGlidepathSummaryComparison } from "../api";
+import { fetchTeamWiseSummary, fetchGlidepathSummaryComparison, fetchMaximoBudget } from "../api";
 import { colorForTeam } from "../colors";
 
 export default function AlertsPanel({ globalFilters, refreshKey }) {
   const [summary, setSummary] = useState(null);
   const [gpComparison, setGpComparison] = useState(null);
+  // Fetched independently — a slow/unreachable Maximo API should never
+  // delay the (fast, DB-only) glidepath/disposal cards above.
+  const [maximo, setMaximo] = useState({ value: null, error: null });
 
   useEffect(() => {
     fetchTeamWiseSummary(globalFilters).then((res) => setSummary(res.data));
@@ -13,7 +16,17 @@ export default function AlertsPanel({ globalFilters, refreshKey }) {
       .catch(() => setGpComparison(null));
   }, [globalFilters, refreshKey]);
 
+  useEffect(() => {
+    setMaximo({ value: null, error: null });
+    fetchMaximoBudget(globalFilters).then((res) =>
+      setMaximo({ value: res.data.maximo_budget, error: res.data.maximo_error })
+    );
+  }, [globalFilters, refreshKey]);
+
   if (!summary) return null;
+
+  const maximoVariance =
+    maximo.value != null && gpComparison ? maximo.value - gpComparison.gp_budget : null;
 
   const teamOrder = summary.teams;
   const alerts = teamOrder.flatMap((team) => {
@@ -95,7 +108,7 @@ export default function AlertsPanel({ globalFilters, refreshKey }) {
             </div>
           </div>
 
-          {gpComparison.maximo_budget != null && (
+          {maximo.value != null ? (
             <div style={{
               background: "var(--panel)",
               borderRadius: "12px",
@@ -108,14 +121,27 @@ export default function AlertsPanel({ globalFilters, refreshKey }) {
                 <span style={{ fontSize: "14px", fontWeight: "600", color: "var(--muted)" }}>Maximo Budget Variance</span>
                 <span style={{ fontSize: "20px" }}>📊</span>
               </div>
-              <div style={{ fontSize: "28px", fontWeight: "700", color: gpComparison.maximo_variance > 0 ? "#f59e0b" : "#10b981", margin: "6px 0" }}>
-                {gpComparison.maximo_budget} <span style={{ fontSize: "14px", fontWeight: "500", color: "var(--muted)" }}>Maximo Budget</span>
+              <div style={{ fontSize: "28px", fontWeight: "700", color: maximoVariance > 0 ? "#f59e0b" : "#10b981", margin: "6px 0" }}>
+                {maximo.value} <span style={{ fontSize: "14px", fontWeight: "500", color: "var(--muted)" }}>Maximo Budget</span>
               </div>
               <div style={{ fontSize: "12px", color: "var(--muted)", lineHeight: "1.4" }}>
                 GlidePath Budget: <strong style={{ color: "var(--ink)" }}>{gpComparison.gp_budget}</strong><br />
-                Variance: <strong style={{ color: "var(--ink)" }}>{gpComparison.maximo_variance > 0 ? `${gpComparison.maximo_variance} vehicles over budget` : gpComparison.maximo_variance < 0 ? `${Math.abs(gpComparison.maximo_variance)} under budget` : "On budget"}</strong>
+                Variance: <strong style={{ color: "var(--ink)" }}>{maximoVariance > 0 ? `${maximoVariance} vehicles over budget` : maximoVariance < 0 ? `${Math.abs(maximoVariance)} under budget` : "On budget"}</strong>
               </div>
             </div>
+          ) : (
+            maximo.error && (
+              <div style={{
+                background: "var(--panel)",
+                borderRadius: "12px",
+                padding: "16px 20px",
+                border: "1px solid var(--line)",
+                boxShadow: "var(--shadow-card)",
+              }}>
+                <div style={{ fontSize: "14px", fontWeight: "600", color: "var(--muted)" }}>Maximo Budget Variance</div>
+                <div style={{ fontSize: "12.5px", color: "var(--muted)", marginTop: "6px" }}>{maximo.error}</div>
+              </div>
+            )
           )}
         </div>
       )}

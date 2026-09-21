@@ -156,6 +156,9 @@ def read_excel_file(file_bytes: bytes, filename: str) -> pd.DataFrame:
     df.columns = dedupe_columns([sanitize_identifier(c) for c in df.columns])
     # Drop fully-empty rows/columns that openpyxl sometimes trails in.
     df = df.dropna(axis=0, how="all").dropna(axis=1, how="all")
+    for col in df.columns:
+        if is_date_column_name(col):
+            df[col] = coerce_date_series(df[col])
     return df
 
 

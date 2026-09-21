@@ -38,9 +38,10 @@ function mergeFilterOptions(resultsByTable) {
   };
 }
 
-export default function UniversalFilterBar({ value, onChange }) {
+export default function UniversalFilterBar({ value, onChange, alwaysOpen = false }) {
   const [options, setOptions] = useState(null);
   const [draft, setDraft] = useState(value || EMPTY_GLOBAL_FILTERS);
+  const [open, setOpen] = useState(alwaysOpen);
 
   useEffect(() => {
     fetchTables()
@@ -127,6 +128,28 @@ export default function UniversalFilterBar({ value, onChange }) {
     options.numeric_filters.length > 0;
   if (!hasAnyFilters) return null;
 
+  // Applied (not just drafted) filter count, shown on the collapsed toggle.
+  const appliedActiveCount =
+    toArray(value?.year).length +
+    toArray(value?.month).length +
+    Object.values(value?.filters || {}).reduce(
+      (acc, v) => acc + (Array.isArray(v) ? (v.length > 0 ? 1 : 0) : v ? 1 : 0),
+      0
+    );
+
+  if (!alwaysOpen && !open) {
+    return (
+      <div className="filters-bar-collapsed">
+        <button type="button" className="filters-toggle-btn" onClick={() => setOpen(true)}>
+          <span>Filters</span>
+          {appliedActiveCount > 0 && (
+            <span className="filters-active-badge">{appliedActiveCount}</span>
+          )}
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="filters-bar">
       <div className="filters-header">
@@ -138,9 +161,16 @@ export default function UniversalFilterBar({ value, onChange }) {
             </span>
           )}
         </div>
-        <button className="btn-reset" onClick={reset}>
-          Reset all filters
-        </button>
+        <div className="filters-header-right">
+          <button className="btn-reset" onClick={reset}>
+            Reset all filters
+          </button>
+          {!alwaysOpen && (
+            <button type="button" className="filters-toggle-btn" onClick={() => setOpen(false)}>
+              Hide Filters
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="filters-row">

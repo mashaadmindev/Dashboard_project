@@ -1,12 +1,25 @@
 import json
+import logging
 import re
 from datetime import date, datetime
+from io import BytesIO, StringIO
 from typing import Any
 
+import matplotlib
+
+matplotlib.use("Agg")  # headless — this process never opens a display
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from reportlab.lib import colors as rl_colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
+from reportlab.platypus import Image as RLImage
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from sqlalchemy import inspect, text
 
 from app.database import (
@@ -21,6 +34,11 @@ from app.ingest import (
     sanitize_identifier,
     sanitize_table_name,
 )
+from app.maximo_client import VCI_OPTIONS as MAXIMO_VCI_OPTIONS
+from app.maximo_client import get_assets as get_maximo_assets
+from app.maximo_client import is_configured as maximo_is_configured
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Excel-to-Postgres Dashboard API")
 
@@ -121,6 +139,9 @@ def _parse_date_components(series: pd.Series, default_year: int = 2026):
 
         # If both month and a valid full 4-digit year are present
         if not pd.isna(curr_mo) and not pd.isna(curr_yr) and curr_yr > 100:
+            continue
+
+        if pd.isna(raw_val) or not isinstance(raw_val, str):
             continue
 
         if not raw_val or raw_val.lower() in ("nan", "none", "null", "nat", ""):
@@ -461,8 +482,8 @@ def get_data(
     table_name: str,
     limit: int = Query(50, le=1000),
     offset: int = Query(0, ge=0),
-    year: int | None = None,
-    month: int | None = Query(None, ge=1, le=12),
+    year: str | None = None,
+    month: str | None = None,
     filters: str | None = None,
 ):
     limit_val = limit.default if hasattr(limit, "default") else limit
@@ -765,29 +786,15 @@ def get_team_wise_summary(
                 .to_dict()
             )
 
-    # 4. Maximo Budget
+    # 4. Maximo Budget — deliberately NOT fetched here. It's a live call to
+    # Ford's Maximo API (see /api/maximo-budget) that can be slow or time
+    # out; bundling it into this endpoint would make every other category
+    # here wait on it too, even though they're independent. The frontend
+    # fetches /api/maximo-budget separately and fills this in once it
+    # resolves, on its own timeline.
     df_maximo = pd.DataFrame()
+    maximo_by_team: dict = {}
     maximo_total = None
-    maximo_by_team = {}
-    if inspector.has_table("maximo_budget"):
-        meta = _get_table_meta("maximo_budget")
-        df_maximo = _apply_filters(
-            _load_table_df("maximo_budget"),
-            meta["primary_date_column"],
-            filter_year,
-            filter_month,
-            parsed_filters,
-        )
-        maximo_total = len(df_maximo)
-        if "team" in df_maximo.columns:
-            maximo_by_team = (
-                df_maximo["team"]
-                .dropna()
-                .astype(str)
-                .str.strip()
-                .value_counts()
-                .to_dict()
-            )
 
     # Discover Teams
     all_teams: set[str] = set()
@@ -991,6 +998,32 @@ def get_team_wise_summary(
     }
 
 
+@app.get("/api/maximo-budget")
+def get_maximo_budget(filters: str | None = None):
+    """Standalone live count from Ford's Maximo asset API (VCI + status=LIVE).
+    Deliberately its own endpoint, separate from team-wise-summary and
+    glidepath-summary-comparison: those are fast, DB-only, and independent
+    of this one — a slow or unreachable Maximo API should never delay them.
+    Callers fetch this on their own timeline and merge it in once it resolves."""
+    parsed_filters = _parse_filters(filters)
+    vci_val = parsed_filters.get("vci") or parsed_filters.get("vic")
+    if isinstance(vci_val, (list, tuple, set)):
+        vci_val = next((v for v in vci_val if v is not None and str(v).strip() != ""), None)
+    dept_no = str(vci_val).zfill(6) if vci_val else None
+
+    if not maximo_is_configured():
+        return {
+            "maximo_budget": None,
+            "maximo_error": "Maximo API is not configured (TOKEN_URL/CLIENT_ID/CLIENT_SECRET/SCOPE/API_URL).",
+        }
+    try:
+        target_vcis = [dept_no] if dept_no else list(MAXIMO_VCI_OPTIONS)
+        return {"maximo_budget": len(get_maximo_assets(target_vcis)), "maximo_error": None}
+    except Exception:
+        logger.exception("Live Maximo asset fetch failed")
+        return {"maximo_budget": None, "maximo_error": "Failed to fetch Maximo API response"}
+
+
 # Defines the one status tile each dataset gets: which column to check, and
 # whether "status" means that column is missing (pending) or present (done).
 DASHBOARD_STATUS_RULES = {
@@ -1063,6 +1096,275 @@ def get_dashboard_kpis(
         "status_label": status_label,
         "status_count": status_count,
     }
+
+
+# =============================================================================
+# EXPORT ENDPOINTS
+# =============================================================================
+
+# The Dashboard page shows exactly these two datasets, so "export the current
+# view" means these two — independent of whatever else has been uploaded.
+EXPORT_TABLES = ["arrival", "disposal"]
+
+
+def _clean_df_for_export(df: pd.DataFrame) -> pd.DataFrame:
+    """Drops columns that are entirely empty in the current (filtered) view
+    and renders dates/numbers as plain, human-readable values."""
+    df = df.dropna(axis=1, how="all")
+    return df.apply(lambda col: col.map(_json_safe))
+
+
+def _describe_active_filters(year, month, parsed_filters: dict) -> str:
+    parts = []
+    if year:
+        parts.append(f"Year: {year}")
+    if month:
+        parts.append(f"Month: {month}")
+    for k, v in parsed_filters.items():
+        v_str = ", ".join(str(x) for x in v) if isinstance(v, list) else str(v)
+        parts.append(f"{k.replace('_', ' ').title()}: {v_str}")
+    return ", ".join(parts) if parts else "None (all data)"
+
+
+@app.get("/api/export/excel")
+def export_excel(
+    year: str | None = None,
+    month: str | None = None,
+    filters: str | None = None,
+    tables: str | None = Query(
+        None, description="Comma-separated subset of EXPORT_TABLES; defaults to all of them"
+    ),
+):
+    """Exports the current view as one workbook, one sheet per dataset.
+    Defaults to Arrival + Disposal (the Dashboard's view); pass `tables` to
+    export just one (e.g. from a single-dataset raw-data page)."""
+    inspector = inspect(engine)
+    parsed_filters = _parse_filters(filters)
+    requested = (
+        [t.strip() for t in tables.split(",") if t.strip()] if tables else EXPORT_TABLES
+    )
+    target_tables = [t for t in EXPORT_TABLES if t in requested]
+
+    buffer = BytesIO()
+    sheets_written = 0
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for table_name in target_tables:
+            if not inspector.has_table(table_name):
+                continue
+            meta = _get_table_meta(table_name)
+            df = _load_table_df(table_name)
+            df = _apply_filters(df, meta["primary_date_column"], year, month, parsed_filters)
+            df.to_excel(writer, sheet_name=table_name.capitalize(), index=False)
+            sheets_written += 1
+
+    if sheets_written == 0:
+        raise HTTPException(status_code=404, detail="No data available to export")
+
+    buffer.seek(0)
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=fleet_view_export.xlsx"},
+    )
+
+
+@app.get("/api/export/csv/{table_name}")
+def export_csv(
+    table_name: str,
+    year: str | None = None,
+    month: str | None = None,
+    filters: str | None = None,
+):
+    """Exports one dataset's current (filtered) view as a cleaned CSV —
+    fully-empty columns dropped, dates/numbers rendered plainly."""
+    meta = _get_table_meta(table_name)
+    df = _load_table_df(table_name)
+    df = _apply_filters(df, meta["primary_date_column"], year, month, _parse_filters(filters))
+    df = _clean_df_for_export(df)
+
+    text_buffer = StringIO()
+    df.to_csv(text_buffer, index=False)
+
+    return StreamingResponse(
+        iter([text_buffer.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={table_name}_export.csv"},
+    )
+
+
+# Mirrors the colors actually used on the Dashboard: METRIC_COLORS (colors.js)
+# for the arrival/disposal accent, and the same per-team palette TeamPieChart
+# uses, so the PDF's charts look like the on-screen ones, not an invented scheme.
+_PDF_ACCENT_COLORS = {"arrival": "#1f8a8a", "disposal": "#e0607a"}
+_PDF_DEFAULT_ACCENT = "#334155"
+_PDF_TEAM_HEADER_COLOR = "#475569"  # neutral slate — distinct from the accent
+_PDF_TEAM_PALETTE = [
+    "#1f8a8a", "#e0607a", "#3b5bdb", "#f2a341", "#7c4dff", "#22a06b", "#6b7280", "#e8590c",
+]
+_PDF_TREND_COLOR = "#002c6c"  # matches TrendChart.jsx's var(--teal) line color
+
+
+def _fig_to_image(fig, width_in, height_in):
+    fig.set_size_inches(width_in, height_in)
+    buf = BytesIO()
+    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    buf.seek(0)
+    return RLImage(buf, width=width_in * inch, height=height_in * inch)
+
+
+def _make_pie_chart_image(labels, values, title):
+    fig, ax = plt.subplots()
+    ax.pie(
+        values,
+        labels=labels,
+        autopct="%1.0f%%",
+        colors=_PDF_TEAM_PALETTE[: len(values)],
+        textprops={"fontsize": 8},
+    )
+    ax.set_title(title, fontsize=10, fontweight="bold")
+    return _fig_to_image(fig, 3.2, 2.6)
+
+
+def _make_trend_chart_image(x_labels, y_values, title):
+    fig, ax = plt.subplots()
+    ax.plot(x_labels, y_values, marker="o", color=_PDF_TREND_COLOR, linewidth=2)
+    ax.fill_between(range(len(x_labels)), y_values, color=_PDF_TREND_COLOR, alpha=0.12)
+    ax.set_title(title, fontsize=10, fontweight="bold")
+    ax.tick_params(axis="x", rotation=45, labelsize=7)
+    ax.tick_params(axis="y", labelsize=7)
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+    return _fig_to_image(fig, 4.6, 2.4)
+
+
+def _monthly_counts(df: pd.DataFrame, date_col: str | None):
+    """Row counts per calendar month, sorted chronologically, as (labels, values)."""
+    if not date_col or date_col not in df.columns:
+        return [], []
+    year_series, month_series = _parse_date_components(df[date_col])
+    period_df = pd.DataFrame({"year": year_series, "month": month_series}).dropna()
+    if period_df.empty:
+        return [], []
+    period_df["period"] = (
+        period_df["year"].astype(int).astype(str)
+        + "-"
+        + period_df["month"].astype(int).astype(str).str.zfill(2)
+    )
+    counts = period_df.groupby("period").size().sort_index()
+    if len(counts) < 2:
+        return [], []
+    return list(counts.index), list(counts.values)
+
+
+def _pdf_table_style(header_hex: str) -> TableStyle:
+    return TableStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, 0), rl_colors.HexColor(header_hex)),
+            ("TEXTCOLOR", (0, 0), (-1, 0), rl_colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("GRID", (0, 0), (-1, -1), 0.5, rl_colors.HexColor("#cbd5e1")),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]
+    )
+
+
+@app.get("/api/export/summary-pdf")
+def export_summary_pdf(
+    year: str | None = None,
+    month: str | None = None,
+    filters: str | None = None,
+):
+    """Builds a short summary PDF: totals, status counts, and top-team
+    breakdowns for Arrival + Disposal under the active filters."""
+    inspector = inspect(engine)
+    parsed_filters = _parse_filters(filters)
+    styles = getSampleStyleSheet()
+
+    story = [
+        Paragraph("Fleet Arrival &amp; Disposal Summary", styles["Title"]),
+        Paragraph(f"Generated {datetime.now().strftime('%d %b %Y, %I:%M %p')}", styles["Normal"]),
+        Paragraph(
+            f"Filters applied: {_describe_active_filters(year, month, parsed_filters)}",
+            styles["Normal"],
+        ),
+        Spacer(1, 0.25 * inch),
+    ]
+
+    any_data = False
+    for table_name in EXPORT_TABLES:
+        if not inspector.has_table(table_name):
+            continue
+        meta = _get_table_meta(table_name)
+        df = _load_table_df(table_name)
+        df = _apply_filters(df, meta["primary_date_column"], year, month, parsed_filters)
+        if df.empty:
+            continue
+        any_data = True
+        accent = _PDF_ACCENT_COLORS.get(table_name, _PDF_DEFAULT_ACCENT)
+
+        summary_rows = [["Metric", "Value"], ["Total Records", str(len(df))]]
+        rule = DASHBOARD_STATUS_RULES.get(table_name)
+        if rule and rule["column"] in df.columns:
+            is_present = df[rule["column"]].notna()
+            status_count = int(
+                (~is_present).sum() if rule["counts_when"] == "missing" else is_present.sum()
+            )
+            summary_rows.append([rule["label"], str(status_count)])
+
+        story.append(Paragraph(table_name.capitalize(), styles["Heading2"]))
+        summary_table = Table(summary_rows, colWidths=[2.5 * inch, 2 * inch])
+        summary_table.setStyle(_pdf_table_style(accent))
+        story.append(summary_table)
+
+        if "team" in df.columns:
+            top_teams = df["team"].dropna().astype(str).str.strip().value_counts().head(5)
+            if not top_teams.empty:
+                story.append(Spacer(1, 0.15 * inch))
+                story.append(Paragraph("Top Teams", styles["Heading3"]))
+                team_rows = [["Team", "Count"]] + [
+                    [str(t), str(c)] for t, c in top_teams.items()
+                ]
+                team_table = Table(team_rows, colWidths=[2.5 * inch, 2 * inch])
+                team_table.setStyle(_pdf_table_style(_PDF_TEAM_HEADER_COLOR))
+                story.append(team_table)
+
+                story.append(Spacer(1, 0.15 * inch))
+                story.append(
+                    _make_pie_chart_image(
+                        list(top_teams.index),
+                        list(top_teams.values),
+                        f"{table_name.capitalize()} by Team",
+                    )
+                )
+
+        trend_labels, trend_values = _monthly_counts(df, meta["primary_date_column"])
+        if trend_labels:
+            story.append(Spacer(1, 0.15 * inch))
+            story.append(
+                _make_trend_chart_image(
+                    trend_labels,
+                    trend_values,
+                    f"{table_name.capitalize()} Monthly Trend",
+                )
+            )
+
+        story.append(Spacer(1, 0.3 * inch))
+
+    if not any_data:
+        story.append(Paragraph("No data available for the selected filters.", styles["Normal"]))
+
+    buffer = BytesIO()
+    SimpleDocTemplate(buffer, pagesize=letter, title="Fleet Summary").build(story)
+    buffer.seek(0)
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=fleet_summary.pdf"},
+    )
 
 
 # =============================================================================
@@ -1213,7 +1515,7 @@ def get_glidepath_data(
                 else 0.0,
                 "reduction_percent": float(first.reduction_percent)
                 if first.reduction_percent is not None
-                else 5.0,
+                else 0.0,
             }
 
             monthly_data = []
@@ -1341,7 +1643,7 @@ def get_glidepath_data(
                 "budget_amount": 0.0,
                 "actual_amount": 0.0,
                 "december_budget": 0.0,
-                "reduction_percent": 5.0,
+                "reduction_percent": 0.0,
             }
 
         empty_monthly = [
@@ -1482,7 +1784,8 @@ def save_glidepath_all(payload: dict):
             budget_amt = float(budget_data.get("budget_amount") or 0.0)
             actual_amt = float(budget_data.get("actual_amount") or 0.0)
             dec_budget = float(budget_data.get("december_budget") or 0.0)
-            red_pct = float(budget_data.get("reduction_percent") or 5.0)
+            red_pct_raw = budget_data.get("reduction_percent")
+            red_pct = float(red_pct_raw) if red_pct_raw is not None else 0.0
 
             conn.execute(
                 text("""
@@ -1660,23 +1963,14 @@ def get_glidepath_summary_comparison(
             actual_disposal = len(df_disp)
             break
 
-    if inspect(engine).has_table("maximo_budget"):
-        df_max = _load_table_df("maximo_budget")
-        meta_max = _get_table_meta("maximo_budget")
-        df_max = _apply_filters(
-            df_max,
-            meta_max["primary_date_column"],
-            target_year,
-            target_month,
-            parsed_filters,
-        )
-        maximo_budget = len(df_max)
-        maximo_variance = maximo_budget - int(gp_budget)
-        is_over_budget = maximo_variance > 0
-    else:
-        maximo_budget = None
-        maximo_variance = None
-        is_over_budget = False
+    # Maximo Budget — deliberately NOT fetched here; same reasoning as
+    # team-wise-summary. The frontend fetches /api/maximo-budget separately
+    # (passing this same vci) and computes the variance client-side once
+    # both gp_budget and maximo_budget are available, so a slow/unreachable
+    # Maximo API never delays the disposal alert or glidepath numbers below.
+    maximo_budget = None
+    maximo_variance = None
+    is_over_budget = False
 
     surplus_arrival = max(0, actual_arrival - gp_arrival)
     target_disposal = gp_disposal + surplus_arrival
