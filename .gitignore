@@ -1,0 +1,21 @@
+/.claude
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+dist/
+
+# Secrets — keep .env.example tracked, never the real .env
+.env
+!.env.example
+
+# Local SQLite artifact from early development (app now uses Postgres)
+dashboard.db
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
